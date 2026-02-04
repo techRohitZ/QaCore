@@ -1,0 +1,49 @@
+# --- Dependencies ---
+node_modules/
+package-lock.json
+yarn.lock
+pnpm-lock.yaml
+
+# --- Environment Variables (CRITICAL: Never upload these) ---
+.env
+.env.local
+.env.development.local
+.env.test.local
+.env.production.local
+backend/.env
+frontend/.env
+
+# --- Operating System Files ---
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+
+# --- Build Outputs (Frontend) ---
+dist/
+build/
+out/
+.next/
+
+# --- Logs ---
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+logs/
+*.log
+
+# --- Playwright (Test Artifacts) ---
+# Since your app generates and runs tests, ignore the results
+test-results/
+playwright-report/
+blob-report/
+playwright/.cache/
+
+# --- AI & Ollama (Llama 3.2) ---
+# Prevent uploading massive model files if you downloaded them locally
+*.gguf
+*.bin
+*.pt
+*.pth
+models/
+ollama-storage/
