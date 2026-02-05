@@ -52,6 +52,9 @@ export const runProjectSuite = (projectId) =>
 export const getProjectRuns = (projectId, params = {}) => 
   API.get(`/projects/${projectId}/runs`, { params });
 
+// Add this new function
+// Add this to the existing exports
+export const getProjectSuites = (projectId) => API.get(`/testcases/project/${projectId}`);
 export default API;
 
 // import axios from "axios";

@@ -1,310 +1,245 @@
-import { useEffect, useState, useCallback } from "react";
+import { useEffect, useState, useCallback, useRef } from "react";
 import { useParams, useNavigate } from "react-router-dom";
 import { motion, AnimatePresence } from "framer-motion";
 import { 
-  ArrowLeft, 
-  Play, 
-  Code2, 
-  Terminal, 
-  Clock, 
-  CheckCircle2, 
-  XCircle,
-  Loader2,
-  FileCode,
-  ChevronDown,
-  Globe,
-  Settings
+  ArrowLeft, Play, Terminal, CheckCircle2, XCircle,
+  Loader2, ChevronDown, Globe, Layers, Zap, 
+  AlertTriangle, FolderGit2, Calendar, Copy, LayoutGrid
 } from "lucide-react";
-import { getProjectById, runProjectSuite, getProjectRuns } from "../api/project.api";
+import { getProjectById, runProjectSuite, getProjectRuns, getProjectSuites } from "../api/project.api";
+import { toast } from "react-hot-toast";
 
-// Reusable Code Block with Syntax-ish highlighting
-const CodeBlock = ({ code }) => (
-  <div className="relative group">
-    <div className="absolute top-3 right-4 text-[10px] font-bold text-slate-600 uppercase tracking-widest opacity-0 group-hover:opacity-100 transition-opacity">
-      Playwright / TS
+const CodeBlock = ({ code, steps }) => {
+  const handleCopy = () => {
+    const text = code || (Array.isArray(steps) ? steps.join('\n') : steps);
+    navigator.clipboard.writeText(text);
+    toast.success("Copied to clipboard!");
+  };
+
+  return (
+    <div className="rounded-xl border border-slate-800 bg-[#0b0e14] overflow-hidden mt-3 shadow-inner">
+      <div className="flex justify-between items-center px-4 py-2 bg-slate-900/50 border-b border-slate-800">
+        <span className="text-[10px] font-bold text-cyan-500 uppercase flex items-center gap-2 tracking-wider">
+          <Terminal size={12} /> Playwright Logic
+        </span>
+        <button onClick={handleCopy} className="p-1 hover:bg-slate-800 rounded transition-colors text-slate-500 hover:text-white">
+          <Copy size={12} />
+        </button>
+      </div>
+      <pre className="p-4 overflow-x-auto text-xs font-mono text-slate-300 leading-relaxed scrollbar-thin scrollbar-thumb-slate-800">
+        {code || (Array.isArray(steps) ? steps.join('\n') : steps)}
+      </pre>
     </div>
-    <pre className="bg-[#0b0e14] text-slate-300 p-5 rounded-2xl overflow-x-auto text-sm font-mono border border-slate-800/50 leading-relaxed shadow-inner">
-      {code}
-    </pre>
-  </div>
-);
+  );
+};
 
 export default function ProjectDetails() {
   const { id } = useParams();
   const navigate = useNavigate();
-
+  
+  // Data State
   const [project, setProject] = useState(null);
+  const [suites, setSuites] = useState([]); 
+  const [runs, setRuns] = useState([]);
+  
+  // UI State
   const [loading, setLoading] = useState(true);
   const [activeTab, setActiveTab] = useState("tests"); 
-  const [running, setRunning] = useState(false);
-  const [runs, setRuns] = useState([]); 
-  const [runsLoading, setRunsLoading] = useState(false);
+  const [isRunningSuite, setIsRunningSuite] = useState(false);
   const [expandedRunId, setExpandedRunId] = useState(null);
 
-  // 1. Fetch Project Data
-  const fetchProject = useCallback(async () => {
+  const pollInterval = useRef(null);
+
+  // --- 🛡️ RESILIENT DATA FETCHING ---
+  const fetchData = useCallback(async () => {
     try {
-      const res = await getProjectById(id);
-      setProject(res.data);
+      // 1. Fetch Project (Critical - Must Succeed)
+      const projRes = await getProjectById(id);
+      setProject(projRes.data);
+
+      // 2. Fetch Runs (Critical - Must Succeed)
+      const runsRes = await getProjectRuns(id);
+      setRuns(Array.isArray(runsRes.data) ? runsRes.data : (runsRes.data?.data || []));
+
+      // 3. Fetch Suites (Optional - Can Fail without crashing)
+      try {
+        const suitesRes = await getProjectSuites(id);
+        setSuites(Array.isArray(suitesRes.data) ? suitesRes.data : []);
+      } catch (suiteErr) {
+        console.warn("⚠️ Suite API missing or empty. Falling back to Project List.");
+        setSuites([]); // Fallback to empty, so we use project.tests instead
+      }
+
+      // Check for active runs to keep polling
+      const history = Array.isArray(runsRes.data) ? runsRes.data : [];
+      return history.some(r => r.status === 'pending' || r.status === 'running');
+
     } catch (err) {
-      console.error("Failed to load project", err);
+      console.error("🔥 Critical Sync Error:", err);
+      return false;
     } finally {
       setLoading(false);
     }
   }, [id]);
 
-  // 2. Fetch Run History
-  const fetchHistory = useCallback(async () => {
-    try {
-      setRunsLoading(true);
-      const res = await getProjectRuns(id);
-      // Ensure we always have an array
-      const runsData = res.data?.data || res.data || [];
-      setRuns(Array.isArray(runsData) ? runsData : []); 
-    } catch (err) {
-      console.error("Failed to load history", err);
-      setRuns([]);
-    } finally {
-      setRunsLoading(false);
-    }
-  }, [id]);
+  useEffect(() => { fetchData(); }, [fetchData]);
 
-  useEffect(() => {
-    fetchProject();
-  }, [fetchProject]);
+  const startPolling = () => {
+    if (pollInterval.current) return;
+    pollInterval.current = setInterval(async () => {
+      const shouldContinue = await fetchData();
+      if (!shouldContinue) stopPolling();
+    }, 3000);
+  };
 
-  useEffect(() => {
-    if (activeTab === "runs") {
-      fetchHistory();
-      const interval = setInterval(() => fetchHistory(), 8000);
-      return () => clearInterval(interval);
+  const stopPolling = () => {
+    if (pollInterval.current) {
+      clearInterval(pollInterval.current);
+      pollInterval.current = null;
     }
-  }, [activeTab, fetchHistory]);
+  };
+
+  useEffect(() => () => stopPolling(), []);
 
   const handleRunSuite = async () => {
+    setIsRunningSuite(true);
+    setActiveTab("runs");
     try {
-      setRunning(true);
+      const tempRun = { _id: "temp-" + Date.now(), status: "pending", createdAt: new Date().toISOString(), results: [] };
+      setRuns([tempRun, ...runs]);
       await runProjectSuite(id);
-      setActiveTab("runs");
-      await fetchHistory();
+      toast.success("Suite execution initialized");
+      startPolling();
     } catch (err) {
-      console.error("Run failed", err);
+      toast.error("Failed to start execution");
     } finally {
-      setRunning(false);
+      setIsRunningSuite(false);
     }
   };
 
   if (loading) return (
-    <div className="min-h-[60vh] flex flex-col items-center justify-center gap-4">
+    <div className="min-h-[80vh] flex flex-col items-center justify-center gap-4">
       <Loader2 className="animate-spin text-cyan-500" size={40} />
-      <p className="text-slate-500 font-mono text-sm tracking-widest">SYNCING PROJECT DATA</p>
+      <p className="text-slate-500 font-mono text-xs uppercase tracking-widest">Loading Project Environment...</p>
     </div>
   );
 
-  return (
-    <div className="max-w-7xl mx-auto px-6 py-10 space-y-10">
-      
-      {/* --- BREADCRUMBS & HEADER --- */}
-      <div className="space-y-6">
-        <motion.button 
-          initial={{ opacity: 0, x: -10 }}
-          animate={{ opacity: 1, x: 0 }}
-          onClick={() => navigate("/projects")}
-          className="flex items-center gap-2 text-xs font-bold text-slate-500 hover:text-cyan-400 uppercase tracking-widest transition-colors"
-        >
-          <ArrowLeft size={14} /> Back to Projects
-        </motion.button>
-        
-        <div className="flex flex-col md:flex-row md:items-end justify-between gap-6">
-          <div className="space-y-3">
-            <div className="flex items-center gap-3">
-              <div className="p-3 rounded-2xl bg-cyan-500/10 text-cyan-400 border border-cyan-500/20 shadow-lg shadow-cyan-500/5">
-                <FileCode size={28} />
-              </div>
-              <h1 className="text-4xl font-black text-white tracking-tight italic">
-                {project.name}
-              </h1>
-            </div>
-            <div className="flex items-center gap-4 text-sm text-slate-400 ml-1">
-              <span className="flex items-center gap-1.5"><Globe size={14} className="text-slate-600"/> {project.url}</span>
-              <span className="text-slate-800">|</span>
-              <span className="flex items-center gap-1.5"><Clock size={14} className="text-slate-600"/> Updated {new Date().toLocaleDateString()}</span>
-            </div>
-          </div>
+  // --- RENDER LOGIC: CHOOSE VIEW ---
+  // If we have Suites, show Suite View. If not, show Grid View (project.tests)
+  const showSuiteView = suites.length > 0;
+  const testsToDisplay = showSuiteView ? [] : (project?.tests || []);
 
-          <div className="flex items-center gap-3">
-            <button className="p-3 rounded-xl bg-slate-900 border border-slate-800 text-slate-400 hover:text-white transition-all">
-              <Settings size={20} />
-            </button>
-            <motion.button 
-              whileHover={{ scale: 1.02 }}
-              whileTap={{ scale: 0.98 }}
-              onClick={handleRunSuite}
-              disabled={running}
-              className={`flex items-center gap-3 px-8 py-3.5 rounded-2xl text-slate-950 font-black shadow-xl transition-all ${
-                running 
-                  ? "bg-slate-800 text-slate-500 cursor-not-allowed" 
-                  : "bg-linear-to-r from-cyan-400 to-sky-500 shadow-cyan-500/20"
-              }`}
-            >
-              {running ? <Loader2 size={20} className="animate-spin" /> : <Play size={20} fill="currentColor" />}
-              {running ? "EXECUTING..." : "RUN SUITE"}
-            </motion.button>
+  return (
+    <div className="max-w-7xl mx-auto px-6 py-8">
+      {/* HEADER */}
+      <div className="flex flex-col md:flex-row justify-between items-start md:items-center mb-10 gap-6">
+        <div className="space-y-4">
+          <button onClick={() => navigate("/projects")} className="group flex items-center gap-2 text-xs font-bold text-slate-500 hover:text-cyan-400 uppercase transition-all">
+            <ArrowLeft size={14} className="group-hover:-translate-x-1 transition-transform" /> Back to Nexus
+          </button>
+          <div className="flex items-center gap-4">
+            <div className="h-14 w-14 rounded-2xl bg-cyan-950/30 border border-cyan-500/20 flex items-center justify-center text-cyan-400">
+              <Layers size={28} />
+            </div>
+            <div>
+              <h1 className="text-3xl font-black text-white uppercase tracking-tight">{project.name}</h1>
+              <div className="flex items-center gap-3 mt-1 text-slate-500 text-xs font-mono">
+                <Globe size={12} /> {project.url}
+              </div>
+            </div>
           </div>
+        </div>
+
+        <div className="flex gap-3">
+          <button onClick={() => navigate(`/generate-tests?projectId=${id}`)} className="flex items-center gap-2 px-5 py-3 rounded-xl bg-slate-900 border border-slate-800 text-slate-300 font-bold hover:text-white hover:border-slate-700 transition-all text-xs uppercase tracking-wider">
+            <Zap size={16} className="text-yellow-500" /> New Instruction
+          </button>
+          <button 
+            onClick={handleRunSuite} 
+            disabled={isRunningSuite} 
+            className="flex items-center gap-2 px-6 py-3 rounded-xl bg-cyan-500 text-slate-950 font-bold hover:bg-cyan-400 disabled:opacity-50 transition-all shadow-lg shadow-cyan-500/20 text-xs uppercase tracking-wider"
+          >
+            {isRunningSuite ? <Loader2 className="animate-spin" size={16} /> : <Play size={16} fill="currentColor" />}
+            {isRunningSuite ? "Initializing..." : "Run Suite"}
+          </button>
         </div>
       </div>
 
-      {/* --- TABS --- */}
-      <div className="border-b border-slate-800/50 flex gap-10">
-        {["tests", "runs"].map((tab) => (
+      {/* TABS */}
+      <div className="flex gap-8 border-b border-slate-800 mb-8">
+        {["tests", "runs"].map(t => (
           <button 
-            key={tab}
-            onClick={() => setActiveTab(tab)}
-            className={`pb-4 text-xs font-black uppercase tracking-[0.2em] transition-all relative ${
-              activeTab === tab ? "text-cyan-400" : "text-slate-500 hover:text-slate-300"
-            }`}
+            key={t} 
+            onClick={() => setActiveTab(t)} 
+            className={`pb-4 text-xs font-black uppercase tracking-widest relative ${activeTab === t ? "text-cyan-400" : "text-slate-600 hover:text-slate-400"}`}
           >
-            {tab === "tests" ? "Generated Suite" : "Execution History"}
-            {activeTab === tab && (
-              <motion.div layoutId="activeTab" className="absolute bottom-0 left-0 w-full h-0.5 bg-cyan-400 shadow-[0_0_8px_rgba(34,211,238,0.4)]" />
-            )}
+            {t === "tests" ? "Test Suites" : "Execution History"}
+            {activeTab === t && <motion.div layoutId="line" className="absolute bottom-0 left-0 w-full h-0.5 bg-cyan-400" />}
           </button>
         ))}
-        {activeTab === "runs" && runsLoading && (
-          <div className="pb-4 flex items-center gap-2 text-[10px] text-cyan-500/50 font-bold uppercase tracking-widest animate-pulse">
-            <div className="w-1.5 h-1.5 rounded-full bg-cyan-500 shadow-[0_0_5px_cyan]" />
-            Live Sync
-          </div>
-        )}
       </div>
 
-      {/* --- CONTENT AREA --- */}
+      {/* CONTENT AREA */}
       <AnimatePresence mode="wait">
-        <motion.div 
-          key={activeTab}
-          initial={{ opacity: 0, y: 15 }}
-          animate={{ opacity: 1, y: 0 }}
-          exit={{ opacity: 0, y: -15 }}
-          transition={{ duration: 0.3 }}
-          className="min-h-100"
-        >
-          {activeTab === "tests" ? (
-            <div className="grid gap-6">
-              {project.tests?.length > 0 ? (
-                project.tests.map((test, i) => (
-                  <motion.div 
-                    initial={{ opacity: 0, x: -10 }}
-                    animate={{ opacity: 1, x: 0 }}
-                    transition={{ delay: i * 0.1 }}
-                    key={i} 
-                    className="rounded-3xl border border-slate-800/50 bg-slate-900/20 backdrop-blur-md overflow-hidden"
-                  >
-                    <div className="px-6 py-4 border-b border-slate-800/50 bg-slate-900/40 flex items-center justify-between">
-                      <div className="flex items-center gap-3">
-                        <Terminal size={16} className="text-cyan-500" />
-                        <span className="font-mono text-xs font-bold text-slate-300 uppercase tracking-widest">
-                          {test.title || `Test_Case_${i+1}.spec.ts`}
-                        </span>
+        <motion.div key={activeTab} initial={{ opacity: 0, y: 5 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -5 }}>
+          
+          {/* --- GENERATED SUITES / GRID TAB --- */}
+          {activeTab === "tests" && (
+            <div className="space-y-8">
+              {showSuiteView ? (
+                /* --- MODE A: SUITE VIEW (Folders) --- */
+                suites.map((suite) => (
+                  <div key={suite._id} className="rounded-3xl border border-slate-800 bg-slate-900/30 overflow-hidden">
+                    <div className="px-6 py-5 bg-slate-950/80 border-b border-slate-800 flex flex-col md:flex-row md:items-center justify-between gap-4">
+                      <div className="space-y-1">
+                        <h3 className="text-base font-bold text-white flex items-center gap-3">
+                          <FolderGit2 className="text-cyan-500" size={20} />
+                          <span className="capitalize">{suite.prompt || "General Scan"}</span>
+                        </h3>
+                        <div className="flex items-center gap-4 text-[10px] font-mono text-slate-500 uppercase tracking-wide">
+                          <span className="flex items-center gap-1.5"><Calendar size={12} /> {new Date(suite.createdAt).toLocaleString()}</span>
+                          <span className="text-cyan-400 font-bold">{suite.testCases?.length || 0} Tests</span>
+                        </div>
                       </div>
                     </div>
-                    <div className="p-4">
-                      <CodeBlock code={test.code} />
+                    <div className="p-6 grid grid-cols-1 lg:grid-cols-2 gap-4">
+                      {suite.testCases?.map((test, i) => (
+                        <TestCaseCard key={i} test={test} />
+                      ))}
                     </div>
-                  </motion.div>
+                  </div>
                 ))
               ) : (
-                <div className="py-20 text-center rounded-3xl border-2 border-dashed border-slate-800/50">
-                  <p className="text-slate-500 font-medium">No tests generated yet.</p>
+                /* --- MODE B: GRID VIEW (Fallback) --- */
+                <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+                   {testsToDisplay.length > 0 ? (
+                      testsToDisplay.map((test, i) => (
+                        <div key={i} className="group p-px rounded-2xl bg-slate-800 hover:bg-cyan-500/30 transition-colors">
+                           <div className="bg-slate-950 rounded-[15px] p-5 h-full relative">
+                              <div className="absolute top-4 right-4 text-slate-700 group-hover:text-cyan-500 transition-colors">
+                                <LayoutGrid size={16} />
+                              </div>
+                              <TestCaseCard test={test} />
+                           </div>
+                        </div>
+                      ))
+                   ) : (
+                      <div className="col-span-full py-24 text-center border-2 border-dashed border-slate-800 rounded-3xl opacity-50">
+                        <Layers size={48} className="mx-auto mb-4 text-slate-700" />
+                        <p className="text-slate-500 font-medium">No tests generated yet.</p>
+                      </div>
+                   )}
                 </div>
               )}
             </div>
-          ) : (
-            <div className="space-y-4">
-              {runs.length > 0 ? (
-                runs.map((run, i) => {
-                  const status = run.status?.toLowerCase() || 'pending';
-                  const isPassed = status === 'passed' || status === 'completed';
-                  const isFailed = status === 'failed';
+          )}
 
-                  return (
-                    <motion.div 
-                      key={run._id}
-                      initial={{ opacity: 0, scale: 0.98 }}
-                      animate={{ opacity: 1, scale: 1 }}
-                      transition={{ delay: i * 0.05 }}
-                      className="rounded-2xl border border-slate-800/50 bg-slate-900/20 backdrop-blur-md overflow-hidden transition-all hover:border-slate-700"
-                    >
-                      <div 
-                        onClick={() => setExpandedRunId(expandedRunId === run._id ? null : run._id)}
-                        className="flex items-center justify-between p-5 cursor-pointer hover:bg-slate-800/20 transition-all"
-                      >
-                        <div className="flex items-center gap-5">
-                          <div className={`w-12 h-12 rounded-2xl flex items-center justify-center border ${
-                            isPassed ? 'bg-emerald-500/5 border-emerald-500/20 text-emerald-400' :
-                            isFailed ? 'bg-red-500/5 border-red-500/20 text-red-400' :
-                            'bg-cyan-500/5 border-cyan-500/20 text-cyan-400'
-                          }`}>
-                            {isPassed ? <CheckCircle2 size={24} /> : isFailed ? <XCircle size={24} /> : <Loader2 size={24} className="animate-spin" />}
-                          </div>
-                          <div>
-                            <h4 className="font-bold text-slate-100 tracking-tight">
-                              Execution #{run._id.substring(run._id.length - 6).toUpperCase()}
-                            </h4>
-                            <div className="flex items-center gap-3 text-[10px] font-bold text-slate-500 uppercase tracking-widest mt-1">
-                              <span>{new Date(run.createdAt).toLocaleString()}</span>
-                              <span>•</span>
-                              <span>{run.results?.length || 0} Steps</span>
-                            </div>
-                          </div>
-                        </div>
-                        
-                        <div className="flex items-center gap-6">
-                           <div className="text-right hidden sm:block">
-                              <p className={`text-xs font-black uppercase tracking-widest ${isPassed ? 'text-emerald-400' : isFailed ? 'text-red-400' : 'text-cyan-400'}`}>
-                                {status}
-                              </p>
-                              <p className="text-[10px] text-slate-600 font-mono mt-0.5">{run.duration || '0'}ms</p>
-                           </div>
-                           <ChevronDown className={`text-slate-600 transition-transform duration-300 ${expandedRunId === run._id ? 'rotate-180 text-cyan-400' : ''}`} />
-                        </div>
-                      </div>
-
-                      <AnimatePresence>
-                        {expandedRunId === run._id && (
-                          <motion.div
-                            initial={{ height: 0 }}
-                            animate={{ height: "auto" }}
-                            exit={{ height: 0 }}
-                            className="overflow-hidden border-t border-slate-800/50 bg-slate-950/20"
-                          >
-                            <div className="p-6 space-y-3">
-                              {run.results?.map((res, idx) => (
-                                <div key={idx} className="flex items-center justify-between p-4 rounded-xl bg-slate-900/50 border border-slate-800/50">
-                                  <div className="flex items-center gap-3">
-                                    {res.status === 'pass' ? <CheckCircle2 size={14} className="text-emerald-500" /> : <XCircle size={14} className="text-red-500" />}
-                                    <span className="text-sm font-medium text-slate-300">{res.testTitle}</span>
-                                  </div>
-                                  <span className="text-[10px] font-mono text-slate-600">{res.duration}ms</span>
-                                </div>
-                              ))}
-                              <button 
-                                onClick={() => navigate(`/runs/${run._id}`)}
-                                className="w-full py-3 mt-2 rounded-xl border border-slate-800 text-[10px] font-black uppercase tracking-[0.2em] text-slate-500 hover:text-cyan-400 hover:border-cyan-500/30 transition-all"
-                              >
-                                View Full Trace Report
-                              </button>
-                            </div>
-                          </motion.div>
-                        )}
-                      </AnimatePresence>
-                    </motion.div>
-                  );
-                })
-              ) : (
-                <div className="py-20 text-center rounded-3xl border-2 border-dashed border-slate-800/50">
-                  <p className="text-slate-500 font-medium">No execution logs found.</p>
-                </div>
-              )}
+          {/* --- EXECUTION HISTORY TAB (Unchanged) --- */}
+          {activeTab === "runs" && (
+            <div className="space-y-4 max-w-4xl mx-auto">
+              {runs.map((run) => (
+                <RunCard key={run._id} run={run} expandedRunId={expandedRunId} setExpandedRunId={setExpandedRunId} />
+              ))}
             </div>
           )}
         </motion.div>
@@ -313,7 +248,127 @@ export default function ProjectDetails() {
   );
 }
 
+// --- SUB-COMPONENTS FOR CLEANLINESS ---
 
+function TestCaseCard({ test }) {
+  return (
+    <div className="bg-slate-950 rounded-xl p-5 h-full border border-slate-800/50">
+      <div className="flex justify-between items-start mb-3">
+        <h4 className="text-sm font-bold text-slate-200 flex items-center gap-2">
+          <CheckCircle2 size={16} className="text-emerald-500/80" /> {test.title}
+        </h4>
+        <span className="text-[10px] bg-slate-900 border border-slate-800 text-slate-500 px-2 py-1 rounded font-mono uppercase">
+          {test.priority || 'MED'}
+        </span>
+      </div>
+      <details className="group/code">
+        <summary className="text-[10px] font-bold text-cyan-500 cursor-pointer uppercase tracking-widest hover:text-cyan-300 transition-colors select-none flex items-center gap-1 list-none">
+          <span className="flex items-center gap-1">View Logic <ChevronDown size={12} className="group-open/code:rotate-180 transition-transform"/></span>
+        </summary>
+        <div className="mt-3">
+          <CodeBlock code={test.code} steps={test.steps} />
+        </div>
+      </details>
+    </div>
+  );
+}
+
+function RunCard({ run, expandedRunId, setExpandedRunId }) {
+  const status = (run.status || 'unknown').toLowerCase();
+  const isPending = status === 'pending' || status === 'running';
+  const isFailed = status === 'failed';
+
+  // --- NEW: Calculate Stats ---
+  const results = run.results || [];
+  const total = results.length;
+  const passed = results.filter(r => r.status === 'pass').length;
+  const failed = results.filter(r => r.status === 'fail').length;
+
+  return (
+    <div className="border border-slate-800 bg-slate-900/40 rounded-xl overflow-hidden">
+      <div 
+        onClick={() => setExpandedRunId(expandedRunId === run._id ? null : run._id)}
+        className="p-4 flex items-center justify-between cursor-pointer hover:bg-slate-800/30 transition-colors"
+      >
+        <div className="flex items-center gap-4">
+          {/* Status Icon */}
+          <div className={`h-10 w-10 rounded-full flex items-center justify-center border ${
+            isPending ? "border-yellow-500/20 bg-yellow-500/10 text-yellow-500" :
+            isFailed ? "border-red-500/20 bg-red-500/10 text-red-500" :
+            "border-emerald-500/20 bg-emerald-500/10 text-emerald-500"
+          }`}>
+            {isPending ? <Loader2 size={18} className="animate-spin" /> : 
+             isFailed ? <AlertTriangle size={18} /> : 
+             <CheckCircle2 size={18} />}
+          </div>
+
+          <div>
+            <div className="flex items-center gap-3">
+              <span className="text-sm font-bold text-white">
+                Run #{run._id.slice(-6).toUpperCase()}
+              </span>
+              
+              {/* Status Badge */}
+              <span className={`text-[10px] font-black px-2 py-0.5 rounded uppercase tracking-wider ${
+                isPending ? "bg-yellow-500/10 text-yellow-500" :
+                isFailed ? "bg-red-500/10 text-red-400" :
+                "bg-emerald-500/10 text-emerald-400"
+              }`}>
+                {status}
+              </span>
+            </div>
+            
+            {/* --- NEW: Result Summary --- */}
+            <div className="flex items-center gap-3 mt-1 text-[10px] font-mono text-slate-500">
+              <span className="flex items-center gap-1.5"><Calendar size={10} /> {new Date(run.createdAt).toLocaleString()}</span>
+              {!isPending && total > 0 && (
+                <>
+                  <span className="text-slate-700">|</span>
+                  <span className={failed > 0 ? "text-red-400 font-bold" : "text-emerald-500 font-bold"}>
+                    {passed}/{total} Tests Passed
+                  </span>
+                </>
+              )}
+            </div>
+          </div>
+        </div>
+
+        <ChevronDown size={18} className={`text-slate-600 transition-transform ${expandedRunId === run._id ? "rotate-180" : ""}`} />
+      </div>
+
+      <AnimatePresence>
+        {expandedRunId === run._id && (
+          <motion.div initial={{ height: 0 }} animate={{ height: "auto" }} exit={{ height: 0 }} className="overflow-hidden border-t border-slate-800 bg-black/20">
+            <div className="p-4 space-y-2">
+              {isPending ? (
+                 <div className="py-4 text-center text-slate-500 flex flex-col items-center gap-2">
+                    <Loader2 className="animate-spin text-cyan-500" />
+                    <span className="text-xs uppercase tracking-widest">Running Tests...</span>
+                 </div>
+              ) : (results.length > 0) ? (
+                results.map((res, idx) => (
+                  <div key={idx} className="flex justify-between p-3 rounded bg-slate-900 border border-slate-800">
+                    <div className="flex items-center gap-3">
+                      {res.status === 'pass' 
+                        ? <CheckCircle2 size={14} className="text-emerald-500" /> 
+                        : <XCircle size={14} className="text-red-500" />}
+                      <span className="text-xs text-slate-300 font-medium">{res.testTitle}</span>
+                    </div>
+                    <span className="text-[10px] text-slate-600 font-mono">{res.duration}ms</span>
+                  </div>
+                ))
+              ) : (
+                <div className="p-3 rounded bg-slate-900 border border-slate-800 text-center text-xs text-slate-500 italic">
+                  No detailed logs available.
+                </div>
+              )}
+            </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+    </div>
+  );
+}
 // import { useEffect, useState, useCallback } from "react";
 // import { useParams, useNavigate } from "react-router-dom";
 // import { motion, AnimatePresence } from "framer-motion";

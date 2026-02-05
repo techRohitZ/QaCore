@@ -1,7 +1,7 @@
 import { Suspense, lazy } from "react";
 import { BrowserRouter, Routes, Route, useLocation } from "react-router-dom";
 import { AnimatePresence } from "framer-motion";
-
+import { Toaster } from 'react-hot-toast';
 // Components
 import RequireAuth from "./auth/RequireAuth";
 import PageLayout from "./layout/PageLayout";
@@ -73,6 +73,7 @@ export default function App() {
   return (
     <BrowserRouter>
       <AnimatedRoutes />
+      <Toaster position="top-right" reverseOrder={false} />
     </BrowserRouter>
   );
 }
