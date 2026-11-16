@@ -9,8 +9,8 @@ exports.getSummary =async (req,res) => {
 
         const passRate =totalRuns === 0
         ? 0
-        :Math.round((passed/totalRuns)*1000);
-        
+        :Math.round((passed/totalRuns)*100);
+
         res.json({
             totalRuns,
             passed,
@@ -23,7 +23,7 @@ exports.getSummary =async (req,res) => {
     }
 };
 
- 
+
 exports.getRecentRuns = async (req, res) => {
   try {
     const userId = req.user.id;
