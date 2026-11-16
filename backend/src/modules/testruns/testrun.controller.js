@@ -14,7 +14,7 @@ exports.executeSuite = async (req, res) => {
         const userId = req.user.id;
 
         // 1. Validate Project
-        const project = await Project.findById(id);
+        const project = await Project.findOne({ _id: id, owner: userId });
         if (!project) {
             return res.status(404).json({ error: "Project not found" });
         }
@@ -100,7 +100,10 @@ exports.getRunById = async (req, res) => {
         }
 
         res.json({
+            _id: run._id,
             id: run._id,
+            stats: run.stats,
+            rawOutput: run.rawOutput,
             status: run.status,
             results: run.results || null,
             createdAt: run.createdAt,
@@ -130,8 +133,7 @@ exports.rerunFailedTests = async (req, res) => {
             return res.status(404).json({ error: 'Failed run not found' });
         }
 
-        const rawOutput = originalRun.results?.rawOutput || '';
-        const failedTitles = extractFailedTestTitles(rawOutput);
+        const failedTitles = originalRun.results.filter(result => result.status === 'fail').map(result => result.testTitle);
 
         if (failedTitles.length === 0) {
             return res.status(400).json({ error: 'No failed tests detected for rerun' });
@@ -142,6 +144,7 @@ exports.rerunFailedTests = async (req, res) => {
             project: originalRun.project,
             testCaseRef: originalRun.testCaseRef,
             status: 'PENDING',
+            type: originalRun.type,
             parentRun: originalRun._id,
             rerunReason: 'FAILED_ONLY'
         });

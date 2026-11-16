@@ -1,18 +1,18 @@
 import { useEffect, useState } from "react";
 import { useParams, useNavigate } from "react-router-dom";
 import { motion } from "framer-motion";
-import axios from "axios"; // Or your custom API helper
-import { 
-  ChevronLeft, 
-  CheckCircle2, 
-  XCircle, 
-  Clock, 
-  Terminal, 
-  FileCode, 
+import { getRunDetails } from "../api/runs.api";
+import {
+  ChevronLeft,
+  CheckCircle2,
+  XCircle,
+  Clock,
+  Terminal,
+  FileCode,
   AlertTriangle,
   ExternalLink
 } from "lucide-react";
-import { getToken } from "../utils/auth";
+
 
 export default function RunDetails() {
   const { runId } = useParams();
@@ -23,10 +23,7 @@ export default function RunDetails() {
   useEffect(() => {
     const fetchRunDetails = async () => {
       try {
-        const token = getToken();
-        const res = await axios.get(`http://localhost:5000/api/runs/${runId}`, {
-          headers: { Authorization: `Bearer ${token}` }
-        });
+        const res = await getRunDetails(runId);
         setRun(res.data);
       } catch (err) {
         console.error("Failed to fetch run details", err);
@@ -48,9 +45,9 @@ export default function RunDetails() {
   return (
     <div className="min-h-screen bg-slate-950 text-slate-100 p-6 lg:p-12">
       <div className="max-w-5xl mx-auto space-y-8">
-        
+
         {/* --- BACK BUTTON --- */}
-        <button 
+        <button
           onClick={() => navigate(-1)}
           className="flex items-center gap-2 text-slate-500 hover:text-cyan-400 transition-colors group"
         >
@@ -73,11 +70,11 @@ export default function RunDetails() {
           </div>
 
           <div className={`px-6 py-3 rounded-2xl flex items-center gap-3 font-bold border ${
-            run.status === 'passed' 
-            ? 'bg-emerald-500/10 border-emerald-500/20 text-emerald-400' 
+            run.status === 'PASSED'
+            ? 'bg-emerald-500/10 border-emerald-500/20 text-emerald-400'
             : 'bg-red-500/10 border-red-500/20 text-red-400'
           }`}>
-            {run.status === 'passed' ? <CheckCircle2 /> : <XCircle />}
+            {run.status === 'PASSED' ? <CheckCircle2 /> : <XCircle />}
             {run.status.toUpperCase()}
           </div>
         </div>
@@ -87,10 +84,10 @@ export default function RunDetails() {
           <h2 className="text-xl font-bold flex items-center gap-2">
             <Terminal size={20} className="text-cyan-400" /> Test Step Summary
           </h2>
-          
+
           <div className="space-y-3">
             {run.results?.map((test, index) => (
-              <motion.div 
+              <motion.div
                 initial={{ opacity: 0, y: 10 }}
                 animate={{ opacity: 1, y: 0 }}
                 transition={{ delay: index * 0.1 }}
